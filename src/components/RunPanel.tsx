@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Play, Square, Image as ImageIcon, ChevronDown, ChevronUp, Filter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,6 +19,8 @@ import { isSeedInput, normalizeSpec } from '@/lib/widgets/spec';
 import type { ObjectInfo } from '@/lib/comfy/types';
 import { PreviewWindow } from './PreviewWindow';
 import { PromptBuilderToggle } from './PromptBuilder';
+import { SoundSelector } from './SoundSelector';
+import { playSound } from '@/lib/sounds';
 import { useT } from '@/store/i18n';
 import { usePromptBuilder, buildPromptFromTags } from '@/store/prompt-builder';
 import { useQueryClient } from '@tanstack/react-query';
@@ -72,6 +74,29 @@ export function RunPanel({ objectInfo }: { objectInfo: ObjectInfo | undefined })
   useEffect(() => {
     ensureConnected();
   }, [ensureConnected]);
+
+  // Play a sound when a run transitions from active → success/error.
+  const soundOnFinish = usePanelStore((s) => s.soundOnFinish);
+  const lastStatusRef = useRef<Map<string, string>>(new Map());
+  // Initialize snapshot once so we don't fire for already-finished persisted runs.
+  const initialisedRef = useRef(false);
+  useEffect(() => {
+    if (!initialisedRef.current) {
+      initialisedRef.current = true;
+      for (const r of runs) lastStatusRef.current.set(r.promptId, r.status);
+      return;
+    }
+    for (const r of runs) {
+      const prev = lastStatusRef.current.get(r.promptId);
+      lastStatusRef.current.set(r.promptId, r.status);
+      if (!prev) continue;
+      const wasActive = prev === 'queued' || prev === 'running';
+      const nowFinished = r.status === 'success' || r.status === 'error';
+      if (wasActive && nowFinished) {
+        playSound(soundOnFinish);
+      }
+    }
+  }, [runs, soundOnFinish]);
 
   const currentRun =
     runs.find((r) => r.promptId === currentPromptId) ?? runs[0] ?? null;
@@ -162,13 +187,18 @@ export function RunPanel({ objectInfo }: { objectInfo: ObjectInfo | undefined })
           <Button
             size="lg"
             onClick={onRun}
-            disabled={!workflow || busy || isRunning === true}
+            disabled={!workflow || busy}
             className="min-w-32"
           >
-            {busy || isRunning ? (
+            {busy ? (
               <>
                 <Loader2 className="size-4 animate-spin" />
-                {isRunning ? t('panel.running') : t('panel.sending')}
+                {t('panel.sending')}
+              </>
+            ) : isRunning ? (
+              <>
+                <Play className="size-4" />
+                {t('panel.runMore')}
               </>
             ) : (
               <>
@@ -241,6 +271,7 @@ export function RunPanel({ objectInfo }: { objectInfo: ObjectInfo | undefined })
             </Badge>
           </div>
           <div className="flex items-center gap-2 ml-auto">
+            <SoundSelector />
             <PromptBuilderToggle />
             <PreviewWindow objectInfo={objectInfo} />
           </div>

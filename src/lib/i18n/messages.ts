@@ -90,6 +90,7 @@ export const messages: Record<Lang, Dict> = {
     'panel.noExposedBody':
       'Open Workflow and tick the inputs you want to control here.',
     'panel.run': 'Run',
+    'panel.runMore': 'Queue more',
     'panel.running': 'Running…',
     'panel.sending': 'Sending…',
     'panel.interrupt': 'Interrupt',
@@ -332,6 +333,7 @@ export const messages: Record<Lang, Dict> = {
     'panel.noExposedBody':
       'Открой Workflow и отметь чекбоксами те входы, которые хочешь редактировать на пульте.',
     'panel.run': 'Запустить',
+    'panel.runMore': 'В очередь',
     'panel.running': 'Выполняется…',
     'panel.sending': 'Отправка…',
     'panel.interrupt': 'Прервать',

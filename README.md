@@ -4,7 +4,7 @@ A web control panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). Im
 
 > 🇷🇺 Русская версия — [README.ru.md](README.ru.md)
 
-![Dashboard](docs/screenshots/dashboard.png)
+![Dashboard](docs/screenshots/panel.png)
 
 ## Features
 

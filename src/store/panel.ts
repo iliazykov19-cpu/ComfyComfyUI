@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { CardColor } from '@/lib/panel/colors';
+import type { SoundType } from '@/lib/sounds';
 
 export type SeedControl = 'fixed' | 'randomize' | 'increment' | 'decrement';
 
@@ -19,6 +20,7 @@ type PanelState = {
   /** Single source for the floating preview (PiP / pinned). 'all' or nodeId. */
   pipOutputFilter: string;
   promptTargets: string[]; // exposed keys that receive prompt builder text
+  soundOnFinish: SoundType;
   setValue: (key: string, v: unknown) => void;
   setSeedControl: (key: string, c: SeedControl) => void;
   setNodeOrder: (order: string[]) => void;
@@ -29,6 +31,7 @@ type PanelState = {
   setPipOutputFilter: (s: string) => void;
   togglePromptTarget: (key: string) => void;
   setPromptTargets: (keys: string[]) => void;
+  setSoundOnFinish: (s: SoundType) => void;
   resetValues: () => void;
   resetLayout: () => void;
 };
@@ -44,6 +47,7 @@ export const usePanelStore = create<PanelState>()(
       outputFilters: [],
       pipOutputFilter: 'all',
       promptTargets: [],
+      soundOnFinish: 'chime',
       setValue: (key, v) =>
         set((s) => ({ values: { ...s.values, [key]: v } })),
       setSeedControl: (key, c) =>
@@ -69,6 +73,7 @@ export const usePanelStore = create<PanelState>()(
             : [...s.promptTargets, key],
         })),
       setPromptTargets: (keys) => set({ promptTargets: keys }),
+      setSoundOnFinish: (s) => set({ soundOnFinish: s }),
       resetValues: () => set({ values: {}, seedControls: {} }),
       resetLayout: () => set({ nodeOrder: [], nodeColors: {} }),
     }),
