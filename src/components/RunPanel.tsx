@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, Play, Square, Image as ImageIcon, ChevronDown, ChevronUp } from 'lucide-react';
+import { Loader2, Play, Square, Image as ImageIcon, ChevronDown, ChevronUp, Filter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import { cn } from '@/lib/utils';
 import { ImageLightbox, useLightbox, type LightboxImage } from './ImageLightbox';
 import { useWorkflowStore } from '@/store/workflow';
 import { usePanelStore, type SeedControl } from '@/store/panel';
@@ -16,7 +18,11 @@ import { buildWorkflow } from '@/lib/workflow/build';
 import { isSeedInput, normalizeSpec } from '@/lib/widgets/spec';
 import type { ObjectInfo } from '@/lib/comfy/types';
 import { PreviewWindow } from './PreviewWindow';
+import { PromptBuilderToggle } from './PromptBuilder';
 import { useT } from '@/store/i18n';
+import { usePromptBuilder, buildPromptFromTags } from '@/store/prompt-builder';
+import { useQueryClient } from '@tanstack/react-query';
+import type { PromptLibrary, Tag } from '@/lib/prompts/types';
 
 const MAX_SEED = 0xffffffff;
 
@@ -44,6 +50,7 @@ export function RunPanel({ objectInfo }: { objectInfo: ObjectInfo | undefined })
   const ensureConnected = useRunStore((s) => s.ensureConnected);
   const queuePrompt = useRunStore((s) => s.queuePrompt);
   const interrupt = useRunStore((s) => s.interrupt);
+  const interruptQueue = useRunStore((s) => s.interruptQueue);
   const wsStatus = useRunStore((s) => s.wsStatus);
   const queueRemaining = useRunStore((s) => s.queueRemaining);
   const runs = useRunStore((s) => s.runs);
@@ -55,6 +62,12 @@ export function RunPanel({ objectInfo }: { objectInfo: ObjectInfo | undefined })
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [batchCount, setBatchCount] = useState(1);
+  const promptTargets = usePanelStore((s) => s.promptTargets);
+  const applyAutoModes = usePromptBuilder((s) => s.applyAutoModes);
+  const builderPrefix = usePromptBuilder((s) => s.prefix);
+  const builderSuffix = usePromptBuilder((s) => s.suffix);
+  const builderCustomText = usePromptBuilder((s) => s.customText);
+  const qc = useQueryClient();
 
   useEffect(() => {
     ensureConnected();
@@ -77,8 +90,35 @@ export function RunPanel({ objectInfo }: { objectInfo: ObjectInfo | undefined })
       const localValues: Record<string, unknown> = { ...values };
 
       for (let i = 0; i < total; i++) {
+        // Iterate / random: pull next tag for active groups before each run.
+        const lib = qc.getQueryData(['prompt-library']) as PromptLibrary | undefined;
+        if (lib) applyAutoModes(lib);
+
+        // Re-read the latest selected tags after applyAutoModes mutated them.
+        const ids = usePromptBuilder.getState().selectedTagIds;
+        let labels: string[] = [];
+        if (lib) {
+          const allTags = new Map<string, Tag>();
+          for (const c of lib.categories)
+            for (const s of c.subcategories)
+              for (const tg of s.tags) allTags.set(tg.id, tg);
+          const resolved = ids
+            .map((id) => allTags.get(id))
+            .filter((x): x is Tag => !!x);
+          labels = resolved.map((tg) => tg.label);
+          if (promptTargets.length > 0) {
+            const finalPrompt = buildPromptFromTags(
+              resolved.map((tg) => tg.value),
+              builderPrefix,
+              builderSuffix,
+              builderCustomText,
+            );
+            for (const k of promptTargets) localValues[k] = finalPrompt;
+          }
+        }
+
         const built = buildWorkflow(workflow, localValues);
-        await queuePrompt(built);
+        await queuePrompt(built, { builderTags: labels });
 
         if (!objectInfo) continue;
         for (const k of exposed) {
@@ -139,11 +179,13 @@ export function RunPanel({ objectInfo }: { objectInfo: ObjectInfo | undefined })
           </Button>
           <Button
             variant="outline"
-            onClick={() => interrupt()}
-            disabled={!isRunning}
+            onClick={() => (queueRemaining > 1 ? interruptQueue() : interrupt())}
+            disabled={!isRunning && queueRemaining === 0}
           >
             <Square className="size-4" />
-            {t('panel.interrupt')}
+            {queueRemaining > 1
+              ? `${t('panel.interrupt')} (${queueRemaining})`
+              : t('panel.interrupt')}
           </Button>
           <label
             className="flex items-center gap-2 text-xs text-muted-foreground"
@@ -199,6 +241,7 @@ export function RunPanel({ objectInfo }: { objectInfo: ObjectInfo | undefined })
             </Badge>
           </div>
           <div className="flex items-center gap-2 ml-auto">
+            <PromptBuilderToggle />
             <PreviewWindow objectInfo={objectInfo} />
           </div>
         </CardContent>
@@ -252,7 +295,37 @@ function RunCard({
   const t = useT();
   const lightbox = useLightbox();
   const [outputsOpen, setOutputsOpen] = useState(true);
-  const lightboxImages: LightboxImage[] = run.outputs.map((o) => ({
+  const outputFilters = usePanelStore((s) => s.outputFilters);
+  const toggleOutputFilter = usePanelStore((s) => s.toggleOutputFilter);
+  const setOutputFilters = usePanelStore((s) => s.setOutputFilters);
+  const interruptOne = useRunStore((s) => s.interruptOne);
+  const isActive = run.status === 'queued' || run.status === 'running';
+  const [filterPopoverOpen, setFilterPopoverOpen] = useState(false);
+
+  const sources = useMemo(() => {
+    const map = new Map<string, { count: number; classType: string; title: string }>();
+    for (const o of run.outputs) {
+      const node = workflow?.[o.nodeId];
+      const classType = node?.class_type ?? '';
+      const title = node ? nodeTitle(o.nodeId, node) : `#${o.nodeId}`;
+      const cur = map.get(o.nodeId);
+      if (cur) cur.count++;
+      else map.set(o.nodeId, { count: 1, classType, title });
+    }
+    return [...map.entries()].sort((a, b) => {
+      const na = parseInt(a[0], 10);
+      const nb = parseInt(b[0], 10);
+      if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+      return a[0].localeCompare(b[0]);
+    });
+  }, [run.outputs, workflow]);
+
+  const filteredOutputs = useMemo(() => {
+    if (outputFilters.length === 0) return run.outputs;
+    return run.outputs.filter((o) => outputFilters.includes(o.nodeId));
+  }, [run.outputs, outputFilters]);
+
+  const lightboxImages: LightboxImage[] = filteredOutputs.map((o) => ({
     src: comfyImageUrl(o.filename, o.subfolder, o.type),
     alt: o.filename,
     caption: `#${o.nodeId} · ${o.filename}`,
@@ -306,6 +379,30 @@ function RunCard({
             <span className="text-muted-foreground font-normal">
               · {run.cachedNodes.length} {t('run.cached')}
             </span>
+          )}
+          <span
+            className={cn(
+              'text-xs font-normal truncate max-w-[280px]',
+              run.builderTags && run.builderTags.length > 0
+                ? 'text-foreground/80'
+                : 'text-muted-foreground/50',
+            )}
+            title={run.builderTags?.join(', ')}
+          >
+            {run.builderTags && run.builderTags.length > 0
+              ? `· ${run.builderTags.join(', ')}`
+              : '· null'}
+          </span>
+          {isActive && (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-7 ml-auto"
+              onClick={() => interruptOne(run.promptId)}
+              title={t('panel.interrupt')}
+            >
+              <Square className="size-3" />
+            </Button>
           )}
         </CardTitle>
       </CardHeader>
@@ -367,26 +464,112 @@ function RunCard({
 
         {run.outputs.length > 0 && (
           <div className="space-y-2">
-            <button
-              type="button"
-              onClick={() => setOutputsOpen((v) => !v)}
-              className="flex items-center gap-2 text-sm font-medium hover:text-foreground text-muted-foreground transition-colors w-full"
-            >
-              {outputsOpen ? (
-                <ChevronUp className="size-4" />
-              ) : (
-                <ChevronDown className="size-4" />
-              )}
-              <span>
-                {t('panel.outputsTitle')}{' '}
-                <span className="text-muted-foreground/70 font-normal">
-                  ({run.outputs.length})
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setOutputsOpen((v) => !v)}
+                className="flex items-center gap-2 text-sm font-medium hover:text-foreground text-muted-foreground transition-colors"
+              >
+                {outputsOpen ? (
+                  <ChevronUp className="size-4" />
+                ) : (
+                  <ChevronDown className="size-4" />
+                )}
+                <span>
+                  {t('panel.outputsTitle')}{' '}
+                  <span className="text-muted-foreground/70 font-normal">
+                    ({filteredOutputs.length}
+                    {filteredOutputs.length !== run.outputs.length
+                      ? `/${run.outputs.length}`
+                      : ''}
+                    )
+                  </span>
                 </span>
-              </span>
-              <span className="ml-auto text-xs">
+              </button>
+              {sources.length > 1 && (
+                <div className="ml-auto relative">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={() => setFilterPopoverOpen((v) => !v)}
+                  >
+                    <Filter className="size-3" />
+                    {outputFilters.length === 0
+                      ? t('panel.outputSourceAll')
+                      : `${outputFilters.length}/${sources.length}`}
+                  </Button>
+                  {filterPopoverOpen && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-30"
+                        onClick={() => setFilterPopoverOpen(false)}
+                      />
+                      <div className="absolute right-0 top-full mt-1 z-40 w-[280px] rounded-md border border-border bg-popover shadow-md p-2 space-y-1">
+                        <div className="flex items-center gap-2 pb-1 mb-1 border-b border-border/40">
+                          <button
+                            type="button"
+                            className="text-[11px] text-muted-foreground hover:text-foreground"
+                            onClick={() => setOutputFilters([])}
+                          >
+                            {t('panel.outputSourceAll')}
+                          </button>
+                          <span className="text-muted-foreground/40">·</span>
+                          <button
+                            type="button"
+                            className="text-[11px] text-muted-foreground hover:text-foreground"
+                            onClick={() =>
+                              setOutputFilters(sources.map(([id]) => id))
+                            }
+                          >
+                            {t('panel.outputSourceNone')}
+                          </button>
+                        </div>
+                        {sources.map(([nodeId, info]) => {
+                          const checked =
+                            outputFilters.length === 0 ||
+                            outputFilters.includes(nodeId);
+                          return (
+                            <label
+                              key={nodeId}
+                              className="flex items-center gap-2 px-1 py-1 rounded hover:bg-muted cursor-pointer"
+                            >
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={() => {
+                                  if (outputFilters.length === 0) {
+                                    // moving from "show all" to explicit list — show all except this
+                                    setOutputFilters(
+                                      sources
+                                        .map(([id]) => id)
+                                        .filter((id) => id !== nodeId),
+                                    );
+                                  } else {
+                                    toggleOutputFilter(nodeId);
+                                  }
+                                }}
+                              />
+                              <span className="text-xs font-mono flex-1 min-w-0 truncate">
+                                #{nodeId} {info.title || info.classType}
+                              </span>
+                              <span className="text-[10px] text-muted-foreground">
+                                {info.count}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+              <span
+                className={`text-xs text-muted-foreground ${sources.length > 1 ? '' : 'ml-auto'}`}
+              >
                 {outputsOpen ? t('panel.outputsCollapse') : t('panel.outputsExpand')}
               </span>
-            </button>
+            </div>
             {outputsOpen && (
               <div
                 className={
@@ -395,7 +578,7 @@ function RunCard({
                     : 'grid grid-cols-2 sm:grid-cols-3 gap-2'
                 }
               >
-                {run.outputs.map((o, i) => (
+                {filteredOutputs.map((o, i) => (
                   <button
                     type="button"
                     key={`${o.nodeId}:${o.subfolder}:${o.filename}:${o.type}`}

@@ -1,6 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { ApiWorkflow } from '@/lib/workflow/types';
 import type { WsMessage, ComfyHistory } from '@/lib/comfy/types';
 
@@ -30,6 +31,8 @@ export type Run = {
     subfolder: string;
     type: string;
   }>;
+  /** Tag labels from the prompt builder at the moment of queueing (for display). */
+  builderTags?: string[];
 };
 
 type State = {
@@ -45,8 +48,13 @@ type State = {
 
 type Actions = {
   ensureConnected: () => void;
-  queuePrompt: (workflow: ApiWorkflow) => Promise<string>;
+  queuePrompt: (
+    workflow: ApiWorkflow,
+    meta?: { builderTags?: string[] },
+  ) => Promise<string>;
   interrupt: () => Promise<void>;
+  interruptOne: (promptId: string) => Promise<void>;
+  interruptQueue: () => Promise<void>;
   clearRuns: () => void;
 };
 
@@ -141,7 +149,8 @@ async function decodeBinaryPreview(blob: Blob): Promise<string | null> {
   return null;
 }
 
-export const useRunStore = create<State & Actions>((set, get) => ({
+export const useRunStore = create<State & Actions>()(
+  persist((set, get) => ({
   clientId:
     typeof window === 'undefined'
       ? 'ssr'
@@ -222,7 +231,7 @@ export const useRunStore = create<State & Actions>((set, get) => ({
     };
   },
 
-  async queuePrompt(workflow) {
+  async queuePrompt(workflow, meta) {
     get().ensureConnected();
     const r = await fetch('/api/comfy/prompt', {
       method: 'POST',
@@ -246,6 +255,7 @@ export const useRunStore = create<State & Actions>((set, get) => ({
       error: null,
       preview: null,
       outputs: [],
+      builderTags: meta?.builderTags,
     };
     set((s) => ({
       currentPromptId: promptId,
@@ -274,6 +284,57 @@ export const useRunStore = create<State & Actions>((set, get) => ({
     }));
   },
 
+  async interruptOne(promptId) {
+    const run = get().runs.find((r) => r.promptId === promptId);
+    if (!run) return;
+    if (run.status === 'running') {
+      await fetch('/api/comfy/interrupt', { method: 'POST' });
+    } else if (run.status === 'queued') {
+      await fetch('/api/comfy/queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delete: [promptId] }),
+      });
+    }
+    set((s) => ({
+      runs: s.runs.map((r) =>
+        r.promptId === promptId &&
+        (r.status === 'queued' || r.status === 'running')
+          ? {
+              ...r,
+              status: 'cancelled',
+              finishedAt: Date.now(),
+              progress: null,
+              executingNode: null,
+            }
+          : r,
+      ),
+    }));
+  },
+
+  async interruptQueue() {
+    // Clear all pending and interrupt the running one.
+    await fetch('/api/comfy/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clear: true }),
+    });
+    await fetch('/api/comfy/interrupt', { method: 'POST' });
+    set((s) => ({
+      runs: s.runs.map((r) =>
+        r.status === 'queued' || r.status === 'running'
+          ? {
+              ...r,
+              status: 'cancelled',
+              finishedAt: Date.now(),
+              progress: null,
+              executingNode: null,
+            }
+          : r,
+      ),
+    }));
+  },
+
   clearRuns() {
     if (lastPreviewUrl) {
       URL.revokeObjectURL(lastPreviewUrl);
@@ -281,7 +342,16 @@ export const useRunStore = create<State & Actions>((set, get) => ({
     }
     set({ runs: [], currentPromptId: null });
   },
-}));
+  }), {
+    name: 'comfy-panel-runs',
+    partialize: (s) => ({
+      runs: s.runs.map((r) => ({ ...r, preview: null })),
+      currentPromptId: s.currentPromptId,
+      wsTextCount: s.wsTextCount,
+      wsBinaryCount: s.wsBinaryCount,
+    }),
+  }),
+);
 
 function handleMessage(
   msg: WsMessage,

@@ -51,6 +51,7 @@ export function PresetMenu() {
   const seedControls = usePanelStore((s) => s.seedControls);
   const nodeOrder = usePanelStore((s) => s.nodeOrder);
   const nodeColors = usePanelStore((s) => s.nodeColors);
+  const promptTargets = usePanelStore((s) => s.promptTargets);
   const panelStore = usePanelStore;
 
   const [saveOpen, setSaveOpen] = useState(false);
@@ -79,6 +80,7 @@ export function PresetMenu() {
           seedControls,
           nodeOrder,
           nodeColors,
+          promptTargets,
         }),
       });
       if (!r.ok) throw new Error(`save → ${r.status}: ${await r.text()}`);
@@ -101,6 +103,7 @@ export function PresetMenu() {
       seedControls: p.seedControls,
       nodeOrder: p.nodeOrder ?? [],
       nodeColors: p.nodeColors ?? {},
+      promptTargets: p.promptTargets ?? [],
     });
   }
 

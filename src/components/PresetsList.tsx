@@ -85,6 +85,7 @@ export function PresetsList() {
       seedControls: p.seedControls,
       nodeOrder: p.nodeOrder ?? [],
       nodeColors: p.nodeColors ?? {},
+      promptTargets: p.promptTargets ?? [],
     });
   }
 

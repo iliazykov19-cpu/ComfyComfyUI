@@ -17,7 +17,7 @@ import {
   rectSortingStrategy,
   sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable';
-import { Columns2, Columns3, Square } from 'lucide-react';
+import { Columns2, Columns3, Square, Link2, Link2Off } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -68,6 +68,8 @@ export function PanelForm() {
   const resetLayout = usePanelStore((s) => s.resetLayout);
   const columns = usePanelStore((s) => s.columns);
   const setColumns = usePanelStore((s) => s.setColumns);
+  const promptTargets = usePanelStore((s) => s.promptTargets);
+  const togglePromptTarget = usePanelStore((s) => s.togglePromptTarget);
 
   const [showJson, setShowJson] = useState(false);
 
@@ -223,6 +225,9 @@ export function PanelForm() {
                     const spec: WidgetSpec = normalizeSpec(allSpecs[inputName]);
                     const current = getCurrentValue(workflow, values, nodeId, inputName);
                     const fieldId = `f-${nodeId}-${inputName}`;
+                    const isStringField = spec.kind === 'string';
+                    const isPromptTarget =
+                      isStringField && promptTargets.includes(key);
                     return (
                       <FieldRow
                         key={inputName}
@@ -234,6 +239,34 @@ export function PanelForm() {
                             {specBadge(spec)}
                           </Badge>
                         }
+                        trailing={
+                          isStringField ? (
+                            <button
+                              type="button"
+                              onClick={() => togglePromptTarget(key)}
+                              className={cn(
+                                'flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border transition-colors',
+                                isPromptTarget
+                                  ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                                  : 'border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted',
+                              )}
+                              title={
+                                isPromptTarget
+                                  ? t('pb.receivingFromBuilder')
+                                  : t('pb.receiveFromBuilder')
+                              }
+                            >
+                              {isPromptTarget ? (
+                                <Link2 className="size-3" />
+                              ) : (
+                                <Link2Off className="size-3" />
+                              )}
+                              {isPromptTarget
+                                ? t('pb.receivingFromBuilder')
+                                : t('pb.receiveFromBuilder')}
+                            </button>
+                          ) : undefined
+                        }
                       >
                         {renderWidget({
                           fieldId,
@@ -244,6 +277,7 @@ export function PanelForm() {
                           seedControl: seedControls[key] ?? 'randomize',
                           onSeedControlChange: (c) => setSeedControl(key, c),
                           inputName,
+                          readOnly: isPromptTarget,
                         })}
                       </FieldRow>
                     );
@@ -300,6 +334,7 @@ function renderWidget({
   seedControl,
   onSeedControlChange,
   inputName,
+  readOnly,
 }: {
   fieldId: string;
   spec: WidgetSpec;
@@ -309,6 +344,7 @@ function renderWidget({
   seedControl: SeedControl;
   onSeedControlChange: (c: SeedControl) => void;
   inputName: string;
+  readOnly?: boolean;
 }) {
   void seedKey;
   switch (spec.kind) {
@@ -349,6 +385,7 @@ function renderWidget({
           spec={spec}
           value={asString(value, spec.default ?? '')}
           onChange={(v) => onChange(v)}
+          readOnly={readOnly}
         />
       );
     case 'boolean':

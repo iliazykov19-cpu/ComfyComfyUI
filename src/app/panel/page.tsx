@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { Header } from '@/components/Header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PanelForm } from '@/components/PanelForm';
+import { PromptBuilderWindow } from '@/components/PromptBuilder';
 import { useWorkflowStore } from '@/store/workflow';
 import { useT } from '@/store/i18n';
 
@@ -54,6 +55,7 @@ export default function PanelPage() {
           <PanelForm />
         )}
       </main>
+      <PromptBuilderWindow />
     </>
   );
 }

@@ -35,6 +35,7 @@ export const presetSchema = z.object({
   seedControls: z.record(z.string(), seedControlSchema),
   nodeOrder: z.array(z.string()).default([]),
   nodeColors: z.record(z.string(), cardColorSchema).default({}),
+  promptTargets: z.array(z.string()).default([]),
 });
 
 export type Preset = z.infer<typeof presetSchema>;
@@ -57,6 +58,7 @@ export const newPresetInputSchema = z.object({
   seedControls: z.record(z.string(), seedControlSchema),
   nodeOrder: z.array(z.string()).optional().default([]),
   nodeColors: z.record(z.string(), cardColorSchema).optional().default({}),
+  promptTargets: z.array(z.string()).optional().default([]),
 });
 
 export const updatePresetInputSchema = z.object({
@@ -69,4 +71,5 @@ export const updatePresetInputSchema = z.object({
   seedControls: z.record(z.string(), seedControlSchema).optional(),
   nodeOrder: z.array(z.string()).optional(),
   nodeColors: z.record(z.string(), cardColorSchema).optional(),
+  promptTargets: z.array(z.string()).optional(),
 });

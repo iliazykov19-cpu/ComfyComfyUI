@@ -14,11 +14,21 @@ type PanelState = {
   nodeOrder: string[];
   nodeColors: Record<string, CardColor>;
   columns: ColumnCount;
+  /** Empty array = show all. Otherwise list of nodeIds to show in RunCard results. */
+  outputFilters: string[];
+  /** Single source for the floating preview (PiP / pinned). 'all' or nodeId. */
+  pipOutputFilter: string;
+  promptTargets: string[]; // exposed keys that receive prompt builder text
   setValue: (key: string, v: unknown) => void;
   setSeedControl: (key: string, c: SeedControl) => void;
   setNodeOrder: (order: string[]) => void;
   setNodeColor: (nodeId: string, color: CardColor) => void;
   setColumns: (n: ColumnCount) => void;
+  toggleOutputFilter: (nodeId: string) => void;
+  setOutputFilters: (ids: string[]) => void;
+  setPipOutputFilter: (s: string) => void;
+  togglePromptTarget: (key: string) => void;
+  setPromptTargets: (keys: string[]) => void;
   resetValues: () => void;
   resetLayout: () => void;
 };
@@ -31,6 +41,9 @@ export const usePanelStore = create<PanelState>()(
       nodeOrder: [],
       nodeColors: {},
       columns: 2,
+      outputFilters: [],
+      pipOutputFilter: 'all',
+      promptTargets: [],
       setValue: (key, v) =>
         set((s) => ({ values: { ...s.values, [key]: v } })),
       setSeedControl: (key, c) =>
@@ -41,6 +54,21 @@ export const usePanelStore = create<PanelState>()(
           nodeColors: { ...s.nodeColors, [nodeId]: color },
         })),
       setColumns: (n) => set({ columns: n }),
+      toggleOutputFilter: (nodeId) =>
+        set((s) => ({
+          outputFilters: s.outputFilters.includes(nodeId)
+            ? s.outputFilters.filter((x) => x !== nodeId)
+            : [...s.outputFilters, nodeId],
+        })),
+      setOutputFilters: (ids) => set({ outputFilters: ids }),
+      setPipOutputFilter: (s) => set({ pipOutputFilter: s }),
+      togglePromptTarget: (key) =>
+        set((s) => ({
+          promptTargets: s.promptTargets.includes(key)
+            ? s.promptTargets.filter((k) => k !== key)
+            : [...s.promptTargets, key],
+        })),
+      setPromptTargets: (keys) => set({ promptTargets: keys }),
       resetValues: () => set({ values: {}, seedControls: {} }),
       resetLayout: () => set({ nodeOrder: [], nodeColors: {} }),
     }),

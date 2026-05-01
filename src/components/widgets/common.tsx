@@ -8,12 +8,14 @@ export function FieldRow({
   label,
   hint,
   badge,
+  trailing,
   children,
 }: {
   id: string;
   label: string;
   hint?: string;
   badge?: ReactNode;
+  trailing?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -23,6 +25,7 @@ export function FieldRow({
           {label}
         </Label>
         {badge}
+        {trailing && <div className="ml-auto">{trailing}</div>}
       </div>
       {children}
       {hint && (

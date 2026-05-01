@@ -15,7 +15,15 @@ A web control panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). Im
 - **Live runner** — submits to `/prompt`, streams progress via WebSocket, shows current node, progress bar, errors, and **live preview** images during sampling. Interrupt button. Run history.
 - **Picture-in-Picture** preview window (Chrome/Edge 116+) and a pinnable floating preview that stays on top while you scroll.
 - **Gallery** — paginated history of all runs with previews, metadata tabs (Images / Workflow / Status), one-click "use as workflow" import.
-- **Presets** — save the full setup (workflow + exposed inputs + values + seed modes + layout + colors) as a JSON file in `data/presets/`. Load, rename, delete from a dedicated page.
+- **Presets** — save the full setup (workflow + exposed inputs + values + seed modes + layout + colors + prompt-builder bindings) as a JSON file in `data/presets/`. Load, rename, delete from a dedicated page.
+- **Prompt builder** — floating, draggable, resizable window with a two-level tag library (Categories → Subcategories → Tags) and ~370 starter tags across 10 categories. Every tag is `{ label, value, labelRu? }` so a short Russian/English name like `Aqua` can stand for a long Booru-style string, while final prompts always go to the model in English. Click tags to build the prompt, write **free text** for fine-tuning that doesn't fit a tag, set **prefix / suffix**, search across the whole library, and **bind any STRING input on the panel** to the builder via a checkbox — bound inputs auto-update.
+- **Iterate / Random** modes per category or subcategory — click the dot indicator on any chip to cycle `off → ↻ iterate → 🎲 random`. With Iterate the next tag from the group is auto-injected on every Run; with Random a random one. Works inside batch runs too — perfect for cycling characters, poses, outfits.
+- **Batch runs** — number-of-runs field next to Run; queues N consecutive prompts with seed-control and iterate/random applied between each.
+- **Lightbox** — full-screen viewer for output images with prev/next/keyboard navigation, thumbnails, download.
+- **Output source filters** — when the workflow has multiple output nodes (SaveImage + PreviewImage etc.), pick which to show. The main panel uses **multi-select checkboxes** (show any combination); the live-preview window (PiP / pinned) uses an independent **single-source selector**.
+- **Persistent runs** — your current and recent runs (with their final images) survive a page reload.
+- **Run names from prompt builder** — the builder tags active when you queued a prompt are stored on the run itself and displayed in the run cards, the live preview, and the Gallery (`null` if none).
+- **Per-run interrupt** — every queued/running card has its own ◻ button: stops just that prompt (drops it from the queue, or interrupts only the active one). The main toolbar's **Interrupt** clears the entire pending queue when batch-running.
 - **Bilingual UI** — English / Русский, switchable in the header.
 
 ## Screenshots
@@ -48,7 +56,7 @@ A web control panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). Im
 ## Manual install (any OS)
 
 ```bash
-git clone https://github.com/<your-name>/comfy-panel.git
+git clone https://github.com/ilia-zykov/ComfyComfyUI.git
 cd comfy-panel
 
 # Optional: copy and edit env (defaults are usually fine)
@@ -107,10 +115,23 @@ Buttons:
 - **Pin preview** — floating overlay in the corner of the page.
 - **Interrupt** — stops the current run.
 
-### 4. Gallery & presets
+### 4. Prompt builder (optional)
 
-- **Gallery** lists past runs with previews and full metadata. Click any card to expand: see all output images, the original workflow JSON, and the run status.
-- **Presets** save the entire current setup (workflow + exposed inputs + values + seed modes + reordering + colors) as `data/presets/<id>.json`. Use the **Save preset** / **Load preset** controls on the Workflow and Panel pages, or open the **Presets** page for full management (rename, delete).
+- Open it with the **Prompt builder** button next to Run / Open PiP. The window is **floating, draggable** by its title bar and **resizable** from the bottom-right corner.
+- Pick a category (Anime girls / Game girls / Hair / Body & Face / Poses / Clothing / Accessories / Background / Lighting / Style — or your own), pick a subcategory, click tags to add them. The library ships with ~370 tags.
+- Each tag is `{ label, labelRu, value }` — `label`/`labelRu` is what you click (auto-localised by the EN/RU switch), `value` is the English string that goes into the prompt.
+- Use the search bar to find tags across the whole library — search works on EN label, RU label, and the value text.
+- **Free text** field below the tag chips lets you append anything that doesn't fit a tag (extra emphasis, weights, negative emphasis, etc.) — it's plugged into the assembled prompt automatically.
+- **Iterate / Random** modes — every category and subcategory chip has a small dot indicator that cycles `off → ↻ iterate → 🎲 random`. When set, on every Run the panel automatically injects the next / a random tag from that group, removing the previous auto-pick. Combine with **batch runs** (Runs > 1) to cycle through characters, poses or outfits in one click.
+- The bottom textarea shows the assembled prompt (`prefix, tag1, tag2, …, free text, suffix`). Copy or clear in one click.
+- **Bind to a STRING input on the panel:** every STRING field has a small **🔗 Receive from prompt builder** toggle. When enabled, the field becomes read-only and auto-updates with the builder's prompt — so you can put your positive / negative through the builder and keep editing tags live.
+- Toggle **edit mode** (pencil icon in the title bar) to add / rename / delete categories, subcategories and tags. Each entry can have an optional Russian display name. **Export / Import** the whole library as JSON for backups or sharing.
+- The library lives at `data/prompt-library.json` and is created with a starter pack on first launch.
+
+### 5. Gallery & presets
+
+- **Gallery** lists past runs with previews and full metadata. Click any card to expand: see all output images in a built-in **lightbox** (prev/next/keyboard nav, download), the original workflow JSON, and the run status.
+- **Presets** save the entire current setup (workflow + exposed inputs + values + seed modes + reordering + colors + prompt-builder bindings) as `data/presets/<id>.json`. Use the **Save preset** / **Load preset** controls on the Workflow and Panel pages, or open the **Presets** page for full management (rename, delete).
 
 ## Architecture
 
@@ -131,22 +152,24 @@ comfy-panel/
 │   ├── app/                 # App Router pages + API routes
 │   │   ├── api/
 │   │   │   ├── comfy/[...path]/   # REST proxy to ComfyUI
-│   │   │   └── presets/           # Preset CRUD
+│   │   │   ├── presets/           # Preset CRUD
+│   │   │   └── prompts/           # Prompt-library GET/PUT
 │   │   ├── page.tsx               # Dashboard
 │   │   ├── workflow/page.tsx      # Workflow editor
 │   │   ├── panel/page.tsx         # The main control panel
 │   │   ├── gallery/page.tsx       # Run history
 │   │   └── presets/page.tsx       # Preset management
-│   ├── components/          # UI components (PanelForm, RunPanel, Gallery, ...)
+│   ├── components/          # UI components (PanelForm, RunPanel, Gallery, PromptBuilder, ...)
 │   ├── lib/
 │   │   ├── comfy/           # Server-only ComfyUI client + types
 │   │   ├── workflow/        # API-format parsing/building
 │   │   ├── widgets/         # Widget spec normalization
 │   │   ├── presets/         # Preset schema + filesystem storage
+│   │   ├── prompts/         # Prompt-library schema, storage, starter seed
 │   │   ├── panel/           # Card colors palette
 │   │   └── i18n/            # Translation messages
 │   └── store/               # Zustand stores
-└── data/                    # Created at runtime, holds preset JSON files
+└── data/                    # Created at runtime, holds preset and prompt-library JSON files
 ```
 
 ## Scripts

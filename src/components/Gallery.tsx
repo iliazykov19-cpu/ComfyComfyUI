@@ -15,7 +15,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { comfyImageUrl } from '@/store/run';
+import { comfyImageUrl, useRunStore } from '@/store/run';
 import { useWorkflowStore } from '@/store/workflow';
 import { apiWorkflowSchema } from '@/lib/workflow/types';
 import type { ComfyHistory, HistoryEntry } from '@/lib/comfy/types';
@@ -78,6 +78,13 @@ function buildItems(history: ComfyHistory): Item[] {
 export function Gallery() {
   const t = useT();
   const setWorkflow = useWorkflowStore((s) => s.setWorkflow);
+  const localRuns = useRunStore((s) => s.runs);
+  const tagsByPromptId = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const r of localRuns)
+      if (r.builderTags && r.builderTags.length) m.set(r.promptId, r.builderTags);
+    return m;
+  }, [localRuns]);
   const [filter, setFilter] = useState('');
   const [onlySuccess, setOnlySuccess] = useState(false);
   const [withImages, setWithImages] = useState(true);
@@ -178,6 +185,7 @@ export function Gallery() {
             <GalleryItemCard
               key={it.promptId}
               item={it}
+              builderTags={tagsByPromptId.get(it.promptId)}
               onUseWorkflow={(wf, name) => setWorkflow(wf, name)}
             />
           ))}
@@ -189,9 +197,11 @@ export function Gallery() {
 
 function GalleryItemCard({
   item,
+  builderTags,
   onUseWorkflow,
 }: {
   item: Item;
+  builderTags?: string[];
   onUseWorkflow: (
     wf: ReturnType<typeof apiWorkflowSchema.parse>,
     name?: string,
@@ -256,6 +266,18 @@ function GalleryItemCard({
           <div className="px-3 py-2">
             <div className="text-xs font-mono text-muted-foreground truncate">
               #{item.number} · {item.promptId.slice(0, 8)}
+            </div>
+            <div
+              className={
+                builderTags && builderTags.length > 0
+                  ? 'text-xs text-foreground/80 truncate font-medium'
+                  : 'text-xs text-muted-foreground/50 truncate'
+              }
+              title={builderTags?.join(', ')}
+            >
+              {builderTags && builderTags.length > 0
+                ? builderTags.join(', ')
+                : 'null'}
             </div>
             <div className="text-[11px] text-muted-foreground truncate">
               {item.classTypes.slice(0, 3).join(' · ')}
