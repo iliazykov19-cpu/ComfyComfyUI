@@ -4,7 +4,7 @@ A web control panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). Im
 
 > 🇷🇺 Русская версия — [README.ru.md](README.ru.md)
 
-![Dashboard](docs/screenshots/dashboard.png)
+![Dashboard](docs/screenshots/panel.png)
 
 ## Features
 
@@ -48,7 +48,7 @@ A web control panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). Im
 ## Manual install (any OS)
 
 ```bash
-git clone https://github.com/<your-name>/comfy-panel.git
+git clone https://github.com/iliazykov19-cpu/ComfyComfyU.git
 cd comfy-panel
 
 # Optional: copy and edit env (defaults are usually fine)
