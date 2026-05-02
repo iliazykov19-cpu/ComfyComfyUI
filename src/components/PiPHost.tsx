@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { create } from 'zustand';
 import { createPortal } from 'react-dom';
 
 declare global {
@@ -33,39 +33,65 @@ function copyStyles(target: Document) {
   target.body.className = document.body.className;
 }
 
-export function usePiP(opts: { width?: number; height?: number } = {}) {
-  const [doc, setDoc] = useState<Document | null>(null);
-  const winRef = useRef<Window | null>(null);
+type PiPState = {
+  doc: Document | null;
+  win: Window | null;
+  open: (opts?: { width?: number; height?: number }) => Promise<void>;
+  close: () => void;
+  /** Pinned preview lives in the main page, but its visibility is shared across pages. */
+  pinned: boolean;
+  setPinned: (v: boolean) => void;
+};
 
-  async function open() {
+const PIN_KEY = 'comfy-panel-pin-preview';
+
+function readPinned(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.localStorage.getItem(PIN_KEY) === '1';
+}
+
+export const usePiPStore = create<PiPState>((set, get) => ({
+  doc: null,
+  win: null,
+  pinned: readPinned(),
+  setPinned: (v) => {
+    if (typeof window !== 'undefined')
+      window.localStorage.setItem(PIN_KEY, v ? '1' : '0');
+    set({ pinned: v });
+  },
+  async open(opts) {
     if (!isPipSupported()) {
       alert(
         'Picture-in-Picture is not supported in this browser. Use Chrome or Edge 116+. Try "Pin preview" instead.',
       );
       return;
     }
+    if (get().win) return; // already open
     const pip = await window.documentPictureInPicture!.requestWindow({
-      width: opts.width ?? 420,
-      height: opts.height ?? 560,
+      width: opts?.width ?? 440,
+      height: opts?.height ?? 600,
     });
     copyStyles(pip.document);
     pip.document.title = 'Comfy Panel — Live Preview';
-    winRef.current = pip;
     pip.addEventListener('pagehide', () => {
-      winRef.current = null;
-      setDoc(null);
+      set({ win: null, doc: null });
     });
-    setDoc(pip.document);
-  }
+    set({ win: pip, doc: pip.document });
+  },
+  close() {
+    const w = get().win;
+    if (w) w.close();
+    set({ win: null, doc: null });
+  },
+}));
 
-  function close() {
-    winRef.current?.close();
-    winRef.current = null;
-    setDoc(null);
-  }
-
-  useEffect(() => () => winRef.current?.close(), []);
-
+/**
+ * Returns a React-friendly facade. Used by buttons that toggle PiP visibility.
+ */
+export function usePiP() {
+  const doc = usePiPStore((s) => s.doc);
+  const open = usePiPStore((s) => s.open);
+  const close = usePiPStore((s) => s.close);
   return { open, close, doc, isOpen: !!doc };
 }
 

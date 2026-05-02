@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, Play, Square, Image as ImageIcon, ChevronDown, ChevronUp, Filter } from 'lucide-react';
+import { Loader2, Play, Square, Image as ImageIcon, ChevronDown, ChevronUp, Filter, ImagePlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -12,6 +12,7 @@ import { ImageLightbox, useLightbox, type LightboxImage } from './ImageLightbox'
 import { useWorkflowStore } from '@/store/workflow';
 import { usePanelStore, type SeedControl } from '@/store/panel';
 import { useRunStore, comfyImageUrl, type Run } from '@/store/run';
+import { useRunAction } from '@/store/run-action';
 import { exposedKey, isLink } from '@/lib/workflow/types';
 import { nodeTitle } from '@/lib/workflow/parse';
 import { buildWorkflow } from '@/lib/workflow/build';
@@ -23,8 +24,14 @@ import { SoundSelector } from './SoundSelector';
 import { playSound } from '@/lib/sounds';
 import { useT } from '@/store/i18n';
 import { usePromptBuilder, buildPromptFromTags } from '@/store/prompt-builder';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query';
 import type { PromptLibrary, Tag } from '@/lib/prompts/types';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 const MAX_SEED = 0xffffffff;
 
@@ -143,7 +150,8 @@ export function RunPanel({ objectInfo }: { objectInfo: ObjectInfo | undefined })
         }
 
         const built = buildWorkflow(workflow, localValues);
-        await queuePrompt(built, { builderTags: labels });
+        const idsForRun = usePromptBuilder.getState().selectedTagIds.slice();
+        await queuePrompt(built, { builderTags: labels, builderTagIds: idsForRun });
 
         if (!objectInfo) continue;
         for (const k of exposed) {
@@ -179,6 +187,20 @@ export function RunPanel({ objectInfo }: { objectInfo: ObjectInfo | undefined })
       setBusy(false);
     }
   }
+
+  const setRun = useRunAction((s) => s.setRun);
+  const setRunBusy = useRunAction((s) => s.setBusy);
+  const setCanRun = useRunAction((s) => s.setCanRun);
+  useEffect(() => {
+    setRun(onRun);
+    return () => setRun(null);
+  });
+  useEffect(() => {
+    setRunBusy(busy);
+  }, [busy, setRunBusy]);
+  useEffect(() => {
+    setCanRun(!!workflow);
+  }, [workflow, setCanRun]);
 
   return (
     <div className="space-y-4">
@@ -273,7 +295,7 @@ export function RunPanel({ objectInfo }: { objectInfo: ObjectInfo | undefined })
           <div className="flex items-center gap-2 ml-auto">
             <SoundSelector />
             <PromptBuilderToggle />
-            <PreviewWindow objectInfo={objectInfo} />
+            <PreviewWindow />
           </div>
         </CardContent>
       </Card>
@@ -286,29 +308,143 @@ export function RunPanel({ objectInfo }: { objectInfo: ObjectInfo | undefined })
         </Card>
       )}
 
+      {runs.length > 1 && <QueueStrip runs={runs} />}
+
       {currentRun && (
         <RunCard run={currentRun} workflow={workflow} objectInfo={objectInfo} />
       )}
 
       {runs.length > 1 && (
-        <details>
-          <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">
-            {t('run.history')} ({runs.length - 1})
-          </summary>
-          <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3">
-            {runs.slice(1).map((r) => (
-              <RunCard
-                key={r.promptId}
-                run={r}
-                workflow={workflow}
-                objectInfo={objectInfo}
-                compact
-              />
-            ))}
-          </div>
-        </details>
+        <RunHistory runs={runs} workflow={workflow} objectInfo={objectInfo} />
       )}
     </div>
+  );
+}
+
+function QueueStrip({ runs }: { runs: Run[] }) {
+  const t = useT();
+  // Order chronologically: oldest queued (back of queue) → newest (right) feels
+  // backwards. Show oldest first on the left so user reads "what's in line".
+  const ordered = useMemo(() => [...runs].reverse(), [runs]);
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {
+      queued: 0,
+      running: 0,
+      success: 0,
+      error: 0,
+      cancelled: 0,
+    };
+    for (const r of runs) c[r.status]++;
+    return c;
+  }, [runs]);
+
+  function scrollToRun(promptId: string) {
+    const el = document.getElementById(`run-${promptId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('ring-2', 'ring-primary');
+      setTimeout(() => el.classList.remove('ring-2', 'ring-primary'), 1200);
+    }
+  }
+
+  return (
+    <Card>
+      <CardContent className="py-2.5 px-3 space-y-1.5">
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <span className="font-semibold uppercase tracking-wider">
+            {t('run.queueStrip')}
+          </span>
+          <span className="font-mono">{runs.length}</span>
+          {counts.running > 0 && (
+            <span className="font-mono text-blue-500">▶ {counts.running}</span>
+          )}
+          {counts.queued > 0 && (
+            <span className="font-mono text-muted-foreground">
+              ◷ {counts.queued}
+            </span>
+          )}
+          {counts.success > 0 && (
+            <span className="font-mono text-emerald-500">✓ {counts.success}</span>
+          )}
+          {counts.error > 0 && (
+            <span className="font-mono text-destructive">✕ {counts.error}</span>
+          )}
+          {counts.cancelled > 0 && (
+            <span className="font-mono text-muted-foreground/70">
+              ⊘ {counts.cancelled}
+            </span>
+          )}
+          <span className="ml-auto text-muted-foreground/60">
+            {t('run.queueStripHint')}
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-1">
+          {ordered.map((r) => {
+            const cls =
+              r.status === 'running'
+                ? 'bg-blue-500 animate-pulse'
+                : r.status === 'queued'
+                ? 'bg-muted-foreground/30'
+                : r.status === 'success'
+                ? 'bg-emerald-500'
+                : r.status === 'error'
+                ? 'bg-destructive'
+                : 'bg-muted-foreground/20'; // cancelled
+            const tagSummary =
+              r.builderTags && r.builderTags.length > 0
+                ? r.builderTags.join(', ')
+                : r.promptId.slice(0, 8);
+            return (
+              <button
+                key={r.promptId}
+                type="button"
+                onClick={() => scrollToRun(r.promptId)}
+                title={`${r.status} · ${tagSummary}`}
+                className={cn(
+                  'size-4 rounded-sm transition-transform hover:scale-125 cursor-pointer',
+                  cls,
+                )}
+              />
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function RunHistory({
+  runs,
+  workflow,
+  objectInfo,
+}: {
+  runs: Run[];
+  workflow: ReturnType<typeof useWorkflowStore.getState>['workflow'];
+  objectInfo: ObjectInfo | undefined;
+}) {
+  const t = useT();
+  // Auto-collapse for big batches so 50+ runs don't render full cards on mount.
+  const [open, setOpen] = useState(runs.length - 1 <= 5);
+  return (
+    <details
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">
+        {t('run.history')} ({runs.length - 1})
+      </summary>
+      <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {runs.slice(1).map((r) => (
+          <RunCard
+            key={r.promptId}
+            run={r}
+            workflow={workflow}
+            objectInfo={objectInfo}
+            compact
+          />
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -396,7 +532,7 @@ function RunCard({
   })();
 
   return (
-    <Card>
+    <Card id={`run-${run.promptId}`} className="scroll-mt-4 transition-shadow">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 flex-wrap text-sm">
           {statusBadge}
@@ -610,21 +746,35 @@ function RunCard({
                 }
               >
                 {filteredOutputs.map((o, i) => (
-                  <button
-                    type="button"
+                  <div
                     key={`${o.nodeId}:${o.subfolder}:${o.filename}:${o.type}`}
-                    onClick={() => lightbox.open(i)}
-                    className="block rounded-md overflow-hidden border border-border/60 group cursor-zoom-in text-left"
+                    className="relative rounded-md overflow-hidden border border-border/60 group"
                   >
-                    <img
-                      src={comfyImageUrl(o.filename, o.subfolder, o.type)}
-                      alt={o.filename}
-                      className="w-full h-auto max-h-[260px] object-contain bg-muted/30 group-hover:opacity-90 transition-opacity"
-                    />
-                    <div className="text-[10px] px-2 py-1 text-muted-foreground truncate font-mono">
-                      #{o.nodeId} · {o.filename}
-                    </div>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => lightbox.open(i)}
+                      className="block w-full text-left cursor-zoom-in"
+                    >
+                      <img
+                        src={comfyImageUrl(o.filename, o.subfolder, o.type)}
+                        alt={o.filename}
+                        className="w-full h-auto max-h-[260px] object-contain bg-muted/30 group-hover:opacity-90 transition-opacity"
+                      />
+                      <div className="text-[10px] px-2 py-1 text-muted-foreground truncate font-mono">
+                        #{o.nodeId} · {o.filename}
+                      </div>
+                    </button>
+                    {run.builderTagIds && run.builderTagIds.length > 0 && (
+                      <BindPreviewButton
+                        imageSrc={comfyImageUrl(
+                          o.filename,
+                          o.subfolder,
+                          o.type,
+                        )}
+                        tagIds={run.builderTagIds}
+                      />
+                    )}
+                  </div>
                 ))}
               </div>
             )}
@@ -639,5 +789,202 @@ function RunCard({
         />
       </CardContent>
     </Card>
+  );
+}
+
+const PROMPT_LIB_KEY = ['prompt-library'];
+
+async function fetchPromptLibrary(): Promise<PromptLibrary> {
+  const r = await fetch('/api/prompts');
+  if (!r.ok) throw new Error(`prompts → ${r.status}`);
+  return r.json();
+}
+
+async function savePromptLibrary(lib: PromptLibrary) {
+  const r = await fetch('/api/prompts', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(lib),
+  });
+  if (!r.ok) throw new Error(`save prompts → ${r.status}: ${await r.text()}`);
+}
+
+function BindPreviewButton({
+  imageSrc,
+  tagIds,
+}: {
+  imageSrc: string;
+  tagIds: string[];
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button
+        type="button"
+        size="icon"
+        variant="secondary"
+        className="absolute top-1 right-1 size-7 opacity-0 group-hover:opacity-100 transition-opacity shadow-md"
+        onClick={() => setOpen(true)}
+        title={t('run.bindPreview')}
+      >
+        <ImagePlus className="size-3.5" />
+      </Button>
+      {open && (
+        <BindPreviewDialog
+          imageSrc={imageSrc}
+          tagIds={tagIds}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function BindPreviewDialog({
+  imageSrc,
+  tagIds,
+  onClose,
+}: {
+  imageSrc: string;
+  tagIds: string[];
+  onClose: () => void;
+}) {
+  const t = useT();
+  const qc = useQueryClient();
+  const { data: library } = useQuery({
+    queryKey: PROMPT_LIB_KEY,
+    queryFn: fetchPromptLibrary,
+    staleTime: 30_000,
+  });
+  const [saving, setSaving] = useState<string | null>(null);
+  const [savedId, setSavedId] = useState<string | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: savePromptLibrary,
+    onSuccess: () => qc.invalidateQueries({ queryKey: PROMPT_LIB_KEY }),
+  });
+
+  const knownTags = useMemo(() => {
+    if (!library) return [] as Tag[];
+    const all = new Map<string, Tag>();
+    for (const c of library.categories)
+      for (const s of c.subcategories)
+        for (const tg of s.tags) all.set(tg.id, tg);
+    return tagIds
+      .map((id) => all.get(id))
+      .filter((x): x is Tag => !!x);
+  }, [library, tagIds]);
+
+  async function bind(tagId: string, src: string | undefined) {
+    if (!library) return;
+    setSaving(tagId);
+    const next: PromptLibrary = {
+      ...library,
+      categories: library.categories.map((c) => ({
+        ...c,
+        subcategories: c.subcategories.map((s) => ({
+          ...s,
+          tags: s.tags.map((tg) =>
+            tg.id === tagId ? { ...tg, previewSrc: src } : tg,
+          ),
+        })),
+      })),
+    };
+    qc.setQueryData(PROMPT_LIB_KEY, next);
+    try {
+      await mutation.mutateAsync(next);
+      setSavedId(tagId);
+      setTimeout(() => setSavedId(null), 1200);
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="!sm:max-w-lg !max-w-[min(560px,calc(100%-2rem))] !gap-0 !p-0 max-h-[80vh] flex flex-col overflow-hidden">
+        <DialogHeader className="px-4 py-3 border-b border-border/60">
+          <DialogTitle className="pr-8">{t('run.bindPreviewTitle')}</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-3 px-4 py-3 border-b border-border/60">
+          <img
+            src={imageSrc}
+            alt=""
+            className="w-full max-h-[200px] object-contain rounded-md border border-border/60 bg-muted/30"
+          />
+          <p className="text-xs text-muted-foreground">
+            {t('run.bindPreviewHelp')}
+          </p>
+        </div>
+        <div className="flex-1 min-h-0 overflow-auto px-4 py-3">
+          {knownTags.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t('run.bindPreviewNoTags')}
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {knownTags.map((tg) => {
+                const isCurrent = tg.previewSrc === imageSrc;
+                return (
+                  <div
+                    key={tg.id}
+                    className="flex items-center gap-2 rounded-md border border-border/40 px-2 py-1.5"
+                  >
+                    {tg.previewSrc ? (
+                      <img
+                        src={tg.previewSrc}
+                        alt=""
+                        className="size-10 object-cover rounded bg-muted/50 shrink-0"
+                      />
+                    ) : (
+                      <div className="size-10 rounded bg-muted/50 grid place-items-center text-muted-foreground/60 shrink-0">
+                        <ImageIcon className="size-4" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">
+                        {tg.label}
+                      </div>
+                      <div className="text-[11px] text-muted-foreground truncate font-mono">
+                        {tg.value}
+                      </div>
+                    </div>
+                    {savedId === tg.id ? (
+                      <span className="text-xs text-emerald-600 dark:text-emerald-400 shrink-0">
+                        {t('run.bindPreviewSaved')}
+                      </span>
+                    ) : isCurrent ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs shrink-0"
+                        disabled={saving === tg.id}
+                        onClick={() => bind(tg.id, undefined)}
+                      >
+                        {t('run.bindPreviewClear')}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs shrink-0"
+                        disabled={saving === tg.id}
+                        onClick={() => bind(tg.id, imageSrc)}
+                      >
+                        {saving === tg.id ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          t('run.bindPreviewSet')
+                        )}
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

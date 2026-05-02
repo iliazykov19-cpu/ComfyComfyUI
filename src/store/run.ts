@@ -33,6 +33,8 @@ export type Run = {
   }>;
   /** Tag labels from the prompt builder at the moment of queueing (for display). */
   builderTags?: string[];
+  /** Tag ids from the prompt builder at the moment of queueing (for binding previews). */
+  builderTagIds?: string[];
 };
 
 type State = {
@@ -50,7 +52,7 @@ type Actions = {
   ensureConnected: () => void;
   queuePrompt: (
     workflow: ApiWorkflow,
-    meta?: { builderTags?: string[] },
+    meta?: { builderTags?: string[]; builderTagIds?: string[] },
   ) => Promise<string>;
   interrupt: () => Promise<void>;
   interruptOne: (promptId: string) => Promise<void>;
@@ -256,6 +258,7 @@ export const useRunStore = create<State & Actions>()(
       preview: null,
       outputs: [],
       builderTags: meta?.builderTags,
+      builderTagIds: meta?.builderTagIds,
     };
     set((s) => ({
       currentPromptId: promptId,
@@ -372,7 +375,13 @@ function handleMessage(
     }
     case 'execution_start': {
       const { prompt_id } = msg.data as { prompt_id: string };
+      // currentPromptId должен указывать на фактически выполняющийся run, а не
+      // на «последний поставленный в очередь». Иначе при мультигенерации бинарные
+      // превью и LivePreview привязаны к queued-run'у, и после interrupt
+      // (который локально помечает этот run cancelled) следующий запуск
+      // не отображается, пока ComfyUI не дойдёт до того же promptId.
       set((s) => ({
+        currentPromptId: prompt_id,
         runs: s.runs.map((r) =>
           r.promptId === prompt_id ? { ...r, status: 'running' } : r,
         ),

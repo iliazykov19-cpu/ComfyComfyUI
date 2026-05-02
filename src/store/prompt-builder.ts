@@ -20,6 +20,8 @@ type State = {
   groupIndices: Record<string, number>;
   /** Tag id currently auto-injected from group, used to remove on next cycle */
   groupAutoTags: Record<string, string>;
+  /** Recent picks for random mode — used to avoid immediate repeats */
+  groupRecent: Record<string, string[]>;
   toggleTag: (id: string) => void;
   setSelected: (ids: string[]) => void;
   setPrefix: (s: string) => void;
@@ -76,6 +78,7 @@ export const usePromptBuilder = create<State>()(
       groupModes: {},
       groupIndices: {},
       groupAutoTags: {},
+      groupRecent: {},
       toggleTag: (id) =>
         set((s) => ({
           selectedTagIds: s.selectedTagIds.includes(id)
@@ -106,6 +109,7 @@ export const usePromptBuilder = create<State>()(
         let selected = [...s.selectedTagIds];
         const indices = { ...s.groupIndices };
         const autos = { ...s.groupAutoTags };
+        const recent = { ...s.groupRecent };
 
         for (const [groupId, mode] of Object.entries(s.groupModes)) {
           if (mode === 'off') continue;
@@ -118,7 +122,21 @@ export const usePromptBuilder = create<State>()(
 
           let idx: number;
           if (mode === 'random') {
-            idx = Math.floor(Math.random() * tags.length);
+            // Avoid recently picked tags. Window size ≈ half the group
+            // (capped so at least one tag is always selectable).
+            const window = Math.max(
+              1,
+              Math.min(tags.length - 1, Math.floor(tags.length / 2)),
+            );
+            const banned = new Set((recent[groupId] ?? []).slice(-window));
+            const pool = tags.filter((t) => !banned.has(t.id));
+            const candidates = pool.length > 0 ? pool : tags;
+            const pick = candidates[Math.floor(Math.random() * candidates.length)];
+            idx = tags.findIndex((t) => t.id === pick.id);
+            const newHistory = [...(recent[groupId] ?? []), pick.id].slice(
+              -Math.max(window, 1),
+            );
+            recent[groupId] = newHistory;
           } else {
             // iterate: bump index, wrap around
             const cur = indices[groupId];
@@ -135,6 +153,7 @@ export const usePromptBuilder = create<State>()(
           selectedTagIds: selected,
           groupIndices: indices,
           groupAutoTags: autos,
+          groupRecent: recent,
         });
       },
     }),

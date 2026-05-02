@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { useI18n } from '@/store/i18n';
+import { PiPHostRoot } from '@/components/PiPHostRoot';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [client] = useState(
@@ -23,5 +24,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
     void useI18n.persist.rehydrate();
   }, []);
 
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={client}>
+      {children}
+      <PiPHostRoot />
+    </QueryClientProvider>
+  );
 }

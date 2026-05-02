@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus,
@@ -553,6 +554,16 @@ function BrowserView({
   const activeSub = activeCat?.subcategories.find((s) => s.id === activeSubId);
   const palette = paletteFor(activeCatIdx >= 0 ? activeCatIdx : 0);
 
+  const selectedSet = new Set(selectedIds);
+  const catSelectedCount = (c: Category) => {
+    let n = 0;
+    for (const s of c.subcategories)
+      for (const tg of s.tags) if (selectedSet.has(tg.id)) n++;
+    return n;
+  };
+  const subSelectedCount = (s: Subcategory) =>
+    s.tags.reduce((n, tg) => (selectedSet.has(tg.id) ? n + 1 : n), 0);
+
   return (
     <div className="flex flex-col">
       {/* Categories */}
@@ -568,6 +579,7 @@ function BrowserView({
               category={c}
               palette={paletteFor(i)}
               active={activeCatId === c.id}
+              selectedCount={catSelectedCount(c)}
               onPick={() => onPickCat(c.id)}
               editMode={editMode}
               patch={patch}
@@ -591,6 +603,7 @@ function BrowserView({
                 subcategory={s}
                 palette={palette}
                 active={activeSubId === s.id}
+                selectedCount={subSelectedCount(s)}
                 onPick={() => onPickSub(s.id)}
                 editMode={editMode}
                 catId={activeCat.id}
@@ -690,6 +703,7 @@ function CategoryChip({
   category,
   palette,
   active,
+  selectedCount,
   onPick,
   editMode,
   patch,
@@ -699,6 +713,7 @@ function CategoryChip({
   category: Category;
   palette: CatPalette;
   active: boolean;
+  selectedCount: number;
   onPick: () => void;
   editMode: boolean;
   patch: (u: (l: PromptLibrary) => PromptLibrary) => void;
@@ -717,6 +732,8 @@ function CategoryChip({
           'pl-1 pr-2.5 py-1 rounded-md text-sm transition-colors flex items-center gap-1.5 border',
           active
             ? `${palette.activeBg} ${palette.activeText} border-transparent`
+            : selectedCount > 0
+            ? 'bg-muted/40 hover:bg-muted text-foreground border-amber-500/60'
             : 'bg-muted/40 hover:bg-muted text-foreground border-transparent',
         )}
       >
@@ -748,6 +765,19 @@ function CategoryChip({
         </span>
         <span>{loc.catName(category)}</span>
         <span className="opacity-60 text-xs">({total})</span>
+        {selectedCount > 0 && (
+          <span
+            className={cn(
+              'ml-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold tabular-nums',
+              active
+                ? 'bg-white/30 text-white'
+                : 'bg-amber-500 text-white',
+            )}
+            title={`${selectedCount} selected`}
+          >
+            {selectedCount}
+          </span>
+        )}
       </button>
       {editMode && (
         <div className="absolute -top-2 -right-2 hidden group-hover:flex gap-0.5">
@@ -782,6 +812,7 @@ function SubcategoryChip({
   subcategory,
   palette,
   active,
+  selectedCount,
   onPick,
   editMode,
   catId,
@@ -792,6 +823,7 @@ function SubcategoryChip({
   subcategory: Subcategory;
   palette: CatPalette;
   active: boolean;
+  selectedCount: number;
   onPick: () => void;
   editMode: boolean;
   catId: string;
@@ -810,6 +842,8 @@ function SubcategoryChip({
           'pl-1 pr-2.5 py-1 rounded-md text-sm transition-colors flex items-center gap-1.5 border',
           active
             ? `${palette.activeBg} ${palette.activeText} border-transparent`
+            : selectedCount > 0
+            ? 'bg-muted/30 hover:bg-muted text-foreground border-amber-500/60'
             : 'bg-muted/30 hover:bg-muted text-foreground border-transparent',
         )}
       >
@@ -846,6 +880,17 @@ function SubcategoryChip({
         </span>
         <span>{loc.subName(subcategory)}</span>
         <span className="opacity-60 text-xs">({subcategory.tags.length})</span>
+        {selectedCount > 0 && (
+          <span
+            className={cn(
+              'ml-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold tabular-nums',
+              active ? 'bg-white/30 text-white' : 'bg-amber-500 text-white',
+            )}
+            title={`${selectedCount} selected`}
+          >
+            {selectedCount}
+          </span>
+        )}
       </button>
       {editMode && (
         <div className="absolute -top-2 -right-2 hidden group-hover:flex gap-0.5">
@@ -913,21 +958,53 @@ function TagChip({
 }) {
   const t = useT();
   const loc = useLocalized();
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const hasPreview = !!tag.previewSrc;
+
+  function onMove(e: React.MouseEvent) {
+    if (!hasPreview) return;
+    setHoverPos({ x: e.clientX, y: e.clientY });
+  }
+
   return (
     <div className="relative group">
       <button
         type="button"
         onClick={onToggle}
         title={tag.value}
+        onMouseEnter={onMove}
+        onMouseMove={onMove}
+        onMouseLeave={() => setHoverPos(null)}
         className={cn(
-          'px-2.5 py-1.5 rounded-md text-sm transition-all border',
+          'rounded-md text-sm transition-all border flex flex-col items-stretch overflow-hidden',
+          hasPreview ? 'w-[96px] p-0' : 'px-2.5 py-1.5',
           active
             ? `${palette.activeBg} ${palette.activeText} border-transparent`
             : 'bg-muted/30 hover:bg-muted text-foreground border-border/40',
         )}
       >
-        {loc.tagLabel(tag)}
+        {hasPreview && (
+          <img
+            src={tag.previewSrc}
+            alt={tag.label}
+            className="w-full h-[110px] object-cover bg-muted/50"
+            draggable={false}
+          />
+        )}
+        <span
+          className={cn(
+            'truncate',
+            hasPreview ? 'px-1.5 py-1 text-xs leading-tight' : '',
+          )}
+        >
+          {loc.tagLabel(tag)}
+        </span>
       </button>
+      {hasPreview && hoverPos && (
+        <FloatingPreview src={tag.previewSrc!} mouse={hoverPos} />
+      )}
       {editMode && (
         <div className="absolute -top-2 -right-2 hidden group-hover:flex gap-0.5">
           <EditTagButton
@@ -1454,5 +1531,36 @@ function ImportExport({
         }}
       />
     </div>
+  );
+}
+
+function FloatingPreview({
+  src,
+  mouse,
+}: {
+  src: string;
+  mouse: { x: number; y: number };
+}) {
+  if (typeof window === 'undefined') return null;
+  const SIZE = 320;
+  const OFFSET = 16;
+  // Flip to the other side of the cursor when running off-screen.
+  const goLeft = mouse.x + OFFSET + SIZE > window.innerWidth;
+  const goUp = mouse.y + OFFSET + SIZE > window.innerHeight;
+  const left = goLeft ? mouse.x - OFFSET - SIZE : mouse.x + OFFSET;
+  const top = goUp ? mouse.y - OFFSET - SIZE : mouse.y + OFFSET;
+  return createPortal(
+    <div
+      className="pointer-events-none fixed z-[60] rounded-lg border-2 border-border bg-card shadow-2xl overflow-hidden"
+      style={{ left, top, width: SIZE, height: SIZE }}
+    >
+      <img
+        src={src}
+        alt=""
+        className="w-full h-full object-contain bg-muted/30"
+        draggable={false}
+      />
+    </div>,
+    document.body,
   );
 }

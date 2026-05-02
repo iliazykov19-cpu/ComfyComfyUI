@@ -1,8 +1,10 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
+import { Filter, X } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -19,14 +21,30 @@ import { comfyImageUrl, useRunStore } from '@/store/run';
 import { useWorkflowStore } from '@/store/workflow';
 import { apiWorkflowSchema } from '@/lib/workflow/types';
 import type { ComfyHistory, HistoryEntry } from '@/lib/comfy/types';
-import { useT } from '@/store/i18n';
+import { useT, useI18n } from '@/store/i18n';
 import { ImageLightbox, useLightbox, type LightboxImage } from './ImageLightbox';
+import type { PromptLibrary, Tag } from '@/lib/prompts/types';
+import { cn } from '@/lib/utils';
 
 async function fetchHistory(max: number): Promise<ComfyHistory> {
   const r = await fetch(`/api/comfy/history?max_items=${max}`);
   if (!r.ok) throw new Error(`history → ${r.status}`);
   return r.json();
 }
+
+async function fetchPromptLibrary(): Promise<PromptLibrary> {
+  const r = await fetch('/api/prompts');
+  if (!r.ok) throw new Error(`prompts → ${r.status}`);
+  return r.json();
+}
+
+type TagInfo = {
+  tag: Tag;
+  catId: string;
+  catName: string;
+  subId: string;
+  subName: string;
+};
 
 type Item = {
   promptId: string;
@@ -77,18 +95,65 @@ function buildItems(history: ComfyHistory): Item[] {
 
 export function Gallery() {
   const t = useT();
+  const lang = useI18n((s) => s.lang);
   const setWorkflow = useWorkflowStore((s) => s.setWorkflow);
   const localRuns = useRunStore((s) => s.runs);
+
   const tagsByPromptId = useMemo(() => {
     const m = new Map<string, string[]>();
     for (const r of localRuns)
       if (r.builderTags && r.builderTags.length) m.set(r.promptId, r.builderTags);
     return m;
   }, [localRuns]);
+
+  const tagIdsByPromptId = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const r of localRuns)
+      if (r.builderTagIds && r.builderTagIds.length)
+        m.set(r.promptId, r.builderTagIds);
+    return m;
+  }, [localRuns]);
+
+  const { data: library } = useQuery({
+    queryKey: ['prompt-library'],
+    queryFn: fetchPromptLibrary,
+    staleTime: 30_000,
+  });
+
+  // Index of tag id → enriched info (cat/sub names) and label → tag (for runs without builderTagIds).
+  const { tagInfoById, tagInfoByLabel } = useMemo(() => {
+    const byId = new Map<string, TagInfo>();
+    const byLabel = new Map<string, TagInfo>();
+    if (!library) return { tagInfoById: byId, tagInfoByLabel: byLabel };
+    for (const c of library.categories) {
+      const catName = lang === 'ru' && c.nameRu ? c.nameRu : c.name;
+      for (const s of c.subcategories) {
+        const subName = lang === 'ru' && s.nameRu ? s.nameRu : s.name;
+        for (const tg of s.tags) {
+          const info: TagInfo = {
+            tag: tg,
+            catId: c.id,
+            catName,
+            subId: s.id,
+            subName,
+          };
+          byId.set(tg.id, info);
+          byLabel.set(tg.label, info);
+          if (tg.labelRu) byLabel.set(tg.labelRu, info);
+        }
+      }
+    }
+    return { tagInfoById: byId, tagInfoByLabel: byLabel };
+  }, [library, lang]);
+
   const [filter, setFilter] = useState('');
   const [onlySuccess, setOnlySuccess] = useState(false);
   const [withImages, setWithImages] = useState(true);
   const [limit, setLimit] = useState(64);
+  const [selectedCats, setSelectedCats] = useState<string[]>([]);
+  const [selectedSubs, setSelectedSubs] = useState<string[]>([]);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [matchAll, setMatchAll] = useState(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['gallery-history', limit],
@@ -97,6 +162,24 @@ export function Gallery() {
   });
 
   const items = useMemo(() => (data ? buildItems(data) : []), [data]);
+
+  // For each item, resolve which tag ids it used.
+  const tagFiltersActive =
+    selectedCats.length + selectedSubs.length + selectedTags.length > 0;
+
+  function resolveItemTagIds(promptId: string): string[] {
+    const ids = tagIdsByPromptId.get(promptId);
+    if (ids && ids.length) return ids;
+    // Fallback: map labels back to ids for runs queued before builderTagIds was introduced.
+    const labels = tagsByPromptId.get(promptId);
+    if (!labels) return [];
+    const out: string[] = [];
+    for (const l of labels) {
+      const info = tagInfoByLabel.get(l);
+      if (info) out.push(info.tag.id);
+    }
+    return out;
+  }
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -107,9 +190,57 @@ export function Gallery() {
         const hay = `${it.promptId} ${it.classTypes.join(' ')}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
+      if (tagFiltersActive) {
+        const tagIds = resolveItemTagIds(it.promptId);
+        if (tagIds.length === 0) return false;
+        const itemCats = new Set<string>();
+        const itemSubs = new Set<string>();
+        const itemTags = new Set<string>();
+        for (const id of tagIds) {
+          const info = tagInfoById.get(id);
+          if (!info) continue;
+          itemCats.add(info.catId);
+          itemSubs.add(info.subId);
+          itemTags.add(info.tag.id);
+        }
+        const hasCat = (id: string) => itemCats.has(id);
+        const hasSub = (id: string) => itemSubs.has(id);
+        const hasTag = (id: string) => itemTags.has(id);
+        if (matchAll) {
+          if (!selectedCats.every(hasCat)) return false;
+          if (!selectedSubs.every(hasSub)) return false;
+          if (!selectedTags.every(hasTag)) return false;
+        } else {
+          const hits =
+            (selectedCats.length === 0 || selectedCats.some(hasCat)) &&
+            (selectedSubs.length === 0 || selectedSubs.some(hasSub)) &&
+            (selectedTags.length === 0 || selectedTags.some(hasTag));
+          if (!hits) return false;
+        }
+      }
       return true;
     });
-  }, [items, filter, onlySuccess, withImages]);
+  }, [
+    items,
+    filter,
+    onlySuccess,
+    withImages,
+    tagFiltersActive,
+    matchAll,
+    selectedCats,
+    selectedSubs,
+    selectedTags,
+    tagInfoById,
+    tagIdsByPromptId,
+    tagsByPromptId,
+    tagInfoByLabel,
+  ]);
+
+  function clearFilters() {
+    setSelectedCats([]);
+    setSelectedSubs([]);
+    setSelectedTags([]);
+  }
 
   return (
     <div className="space-y-4">
@@ -158,6 +289,56 @@ export function Gallery() {
           </div>
         </CardContent>
       </Card>
+
+      {library && (
+        <Card>
+          <CardContent className="py-3 flex flex-wrap items-center gap-2">
+            <CategoryFilter
+              library={library}
+              selected={selectedCats}
+              onChange={setSelectedCats}
+              lang={lang}
+            />
+            <SubcategoryFilter
+              library={library}
+              selected={selectedSubs}
+              onChange={setSelectedSubs}
+              lang={lang}
+            />
+            <TagFilter
+              library={library}
+              selected={selectedTags}
+              onChange={setSelectedTags}
+              lang={lang}
+            />
+            {tagFiltersActive && (
+              <>
+                <label className="flex items-center gap-2 text-xs cursor-pointer ml-2">
+                  <Checkbox
+                    checked={matchAll}
+                    onCheckedChange={(v) => setMatchAll(v === true)}
+                  />
+                  {matchAll
+                    ? t('gallery.filterMatchAll')
+                    : t('gallery.filterMatchAny')}
+                </label>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs"
+                  onClick={clearFilters}
+                >
+                  <X className="size-3" />
+                  {t('gallery.filterClear')}
+                </Button>
+              </>
+            )}
+            <span className="ml-auto text-xs text-muted-foreground">
+              {filtered.length} / {items.length}
+            </span>
+          </CardContent>
+        </Card>
+      )}
 
       {error && (
         <Card className="border-destructive/50">
@@ -379,5 +560,332 @@ function GalleryItemCard({
       onClose={lightbox.close}
     />
     </>
+  );
+}
+
+function FilterPopover({
+  label,
+  count,
+  total,
+  onClear,
+  children,
+}: {
+  label: string;
+  count: number;
+  total: number;
+  onClear: () => void;
+  children: (close: () => void) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+    if (!open) return;
+    function reposition() {
+      const el = btnRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const POPUP_W = 320;
+      const left = Math.max(
+        8,
+        Math.min(window.innerWidth - POPUP_W - 8, r.left),
+      );
+      setPos({ top: r.bottom + 4, left });
+    }
+    reposition();
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+    return () => {
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', reposition, true);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <Button
+        ref={btnRef}
+        size="sm"
+        variant={count > 0 ? 'default' : 'outline'}
+        className="h-8 text-xs"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Filter className="size-3" />
+        {label}
+        {count > 0 ? (
+          <span className="font-mono ml-1">
+            {count}/{total}
+          </span>
+        ) : (
+          <span className="font-mono ml-1 opacity-60">{total}</span>
+        )}
+      </Button>
+      {mounted && open && pos &&
+        createPortal(
+          <>
+            <div
+              className="fixed inset-0 z-[60]"
+              onClick={() => setOpen(false)}
+            />
+            <div
+              className="fixed z-[61] w-[320px] rounded-md border border-border bg-popover shadow-lg p-2"
+              style={{ top: pos.top, left: pos.left }}
+            >
+              <div className="flex items-center justify-between pb-1 mb-1 border-b border-border/40">
+                <span className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold">
+                  {label}
+                </span>
+                {count > 0 && (
+                  <button
+                    type="button"
+                    className="text-[11px] text-muted-foreground hover:text-foreground"
+                    onClick={onClear}
+                  >
+                    <X className="size-3 inline" /> clear
+                  </button>
+                )}
+              </div>
+              {children(() => setOpen(false))}
+            </div>
+          </>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+function CategoryFilter({
+  library,
+  selected,
+  onChange,
+  lang,
+}: {
+  library: PromptLibrary;
+  selected: string[];
+  onChange: (next: string[]) => void;
+  lang: string;
+}) {
+  const t = useT();
+  return (
+    <FilterPopover
+      label={t('gallery.filterCats')}
+      count={selected.length}
+      total={library.categories.length}
+      onClear={() => onChange([])}
+    >
+      {() => (
+        <div className="max-h-[300px] overflow-auto space-y-0.5">
+          {library.categories.map((c) => {
+            const checked = selected.includes(c.id);
+            return (
+              <label
+                key={c.id}
+                className="flex items-center gap-2 px-1 py-1 rounded hover:bg-muted cursor-pointer"
+              >
+                <Checkbox
+                  checked={checked}
+                  onCheckedChange={() => {
+                    onChange(
+                      checked
+                        ? selected.filter((id) => id !== c.id)
+                        : [...selected, c.id],
+                    );
+                  }}
+                />
+                <span className="text-sm flex-1 truncate">
+                  {lang === 'ru' && c.nameRu ? c.nameRu : c.name}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </FilterPopover>
+  );
+}
+
+function SubcategoryFilter({
+  library,
+  selected,
+  onChange,
+  lang,
+}: {
+  library: PromptLibrary;
+  selected: string[];
+  onChange: (next: string[]) => void;
+  lang: string;
+}) {
+  const t = useT();
+  const groups = useMemo(
+    () =>
+      library.categories.map((c) => ({
+        id: c.id,
+        name: lang === 'ru' && c.nameRu ? c.nameRu : c.name,
+        subs: c.subcategories.map((s) => ({
+          id: s.id,
+          name: lang === 'ru' && s.nameRu ? s.nameRu : s.name,
+          tagCount: s.tags.length,
+        })),
+      })),
+    [library, lang],
+  );
+  const total = useMemo(
+    () => library.categories.reduce((n, c) => n + c.subcategories.length, 0),
+    [library],
+  );
+  return (
+    <FilterPopover
+      label={t('gallery.filterSubs')}
+      count={selected.length}
+      total={total}
+      onClear={() => onChange([])}
+    >
+      {() => (
+        <div className="max-h-[360px] overflow-auto space-y-2">
+          {groups.map((g) => (
+            <div key={g.id}>
+              <div className="text-[11px] text-muted-foreground uppercase tracking-wider px-1 py-0.5">
+                {g.name}
+              </div>
+              {g.subs.map((s) => {
+                const checked = selected.includes(s.id);
+                return (
+                  <label
+                    key={s.id}
+                    className="flex items-center gap-2 px-1 py-1 rounded hover:bg-muted cursor-pointer"
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={() => {
+                        onChange(
+                          checked
+                            ? selected.filter((id) => id !== s.id)
+                            : [...selected, s.id],
+                        );
+                      }}
+                    />
+                    <span className="text-sm flex-1 truncate">{s.name}</span>
+                    <span className="text-[10px] font-mono text-muted-foreground">
+                      {s.tagCount}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </FilterPopover>
+  );
+}
+
+function TagFilter({
+  library,
+  selected,
+  onChange,
+  lang,
+}: {
+  library: PromptLibrary;
+  selected: string[];
+  onChange: (next: string[]) => void;
+  lang: string;
+}) {
+  const t = useT();
+  const [q, setQ] = useState('');
+  const flat = useMemo(() => {
+    const list: { tag: Tag; catName: string; subName: string }[] = [];
+    for (const c of library.categories) {
+      const cn = lang === 'ru' && c.nameRu ? c.nameRu : c.name;
+      for (const s of c.subcategories) {
+        const sn = lang === 'ru' && s.nameRu ? s.nameRu : s.name;
+        for (const tg of s.tags)
+          list.push({ tag: tg, catName: cn, subName: sn });
+      }
+    }
+    return list;
+  }, [library, lang]);
+
+  const filtered = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    // Always show selected tags first so the user can see their picks even without searching the entire 800+ list.
+    const sel: typeof flat = [];
+    const rest: typeof flat = [];
+    for (const it of flat) {
+      const matchesQuery =
+        !ql ||
+        it.tag.label.toLowerCase().includes(ql) ||
+        (it.tag.labelRu ?? '').toLowerCase().includes(ql) ||
+        it.tag.value.toLowerCase().includes(ql) ||
+        it.catName.toLowerCase().includes(ql) ||
+        it.subName.toLowerCase().includes(ql);
+      if (selected.includes(it.tag.id)) sel.push(it);
+      else if (matchesQuery) rest.push(it);
+    }
+    return [...sel, ...rest].slice(0, 200);
+  }, [flat, q, selected]);
+
+  return (
+    <FilterPopover
+      label={t('gallery.filterTags')}
+      count={selected.length}
+      total={flat.length}
+      onClear={() => onChange([])}
+    >
+      {() => (
+        <div className="space-y-2">
+          <Input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={t('gallery.tagSearch')}
+            className="h-8 text-sm"
+          />
+          <div className="max-h-[320px] overflow-auto space-y-0.5">
+            {filtered.map(({ tag, catName, subName }) => {
+              const checked = selected.includes(tag.id);
+              return (
+                <label
+                  key={tag.id}
+                  className={cn(
+                    'flex items-center gap-2 px-1 py-1 rounded cursor-pointer',
+                    checked ? 'bg-primary/10' : 'hover:bg-muted',
+                  )}
+                >
+                  <Checkbox
+                    checked={checked}
+                    onCheckedChange={() => {
+                      onChange(
+                        checked
+                          ? selected.filter((id) => id !== tag.id)
+                          : [...selected, tag.id],
+                      );
+                    }}
+                  />
+                  {tag.previewSrc ? (
+                    <img
+                      src={tag.previewSrc}
+                      alt=""
+                      className="size-7 object-cover rounded shrink-0"
+                    />
+                  ) : null}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm truncate">
+                      {lang === 'ru' && tag.labelRu ? tag.labelRu : tag.label}
+                    </div>
+                    <div className="text-[10px] font-mono text-muted-foreground truncate">
+                      {catName} / {subName}
+                    </div>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </FilterPopover>
   );
 }

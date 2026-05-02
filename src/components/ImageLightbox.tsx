@@ -94,7 +94,13 @@ export function ImageLightbox({ images, index, onIndexChange, onClose }: Props) 
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 relative flex items-center justify-center">
+      <div
+        className="flex-1 min-h-0 relative flex items-center justify-center"
+        onClick={(e) => {
+          // Click on the dimmed area (not on a child) — close.
+          if (e.target === e.currentTarget) onClose();
+        }}
+      >
         {images.length > 1 && (
           <Button
             variant="ghost"
@@ -112,7 +118,8 @@ export function ImageLightbox({ images, index, onIndexChange, onClose }: Props) 
         <img
           src={current.src}
           alt={current.alt ?? ''}
-          className="max-w-[95vw] max-h-[calc(100vh-160px)] object-contain"
+          onClick={onClose}
+          className="max-w-[95vw] max-h-[calc(100vh-160px)] object-contain cursor-zoom-out"
         />
         {images.length > 1 && (
           <Button

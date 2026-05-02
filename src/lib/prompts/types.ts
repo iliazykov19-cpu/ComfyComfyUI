@@ -5,6 +5,8 @@ export const tagSchema = z.object({
   label: z.string(),
   labelRu: z.string().optional(),
   value: z.string(),
+  /** Optional preview thumbnail URL (e.g. /api/comfy/view?...) */
+  previewSrc: z.string().optional(),
 });
 
 export const subcategorySchema = z.object({

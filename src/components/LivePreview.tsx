@@ -1,10 +1,11 @@
 'use client';
 
 import { useMemo } from 'react';
-import { Loader2, Square, X } from 'lucide-react';
+import { Loader2, Play, Square, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useRunStore, comfyImageUrl, type Run } from '@/store/run';
+import { useRunAction } from '@/store/run-action';
 import { useWorkflowStore } from '@/store/workflow';
 import { usePanelStore } from '@/store/panel';
 import { nodeTitle } from '@/lib/workflow/parse';
@@ -25,6 +26,9 @@ export function LivePreview({ objectInfo, onClose, closeLabel }: Props) {
   const interrupt = useRunStore((s) => s.interrupt);
   const pipOutputFilter = usePanelStore((s) => s.pipOutputFilter);
   const setPipOutputFilter = usePanelStore((s) => s.setPipOutputFilter);
+  const runFn = useRunAction((s) => s.run);
+  const runBusy = useRunAction((s) => s.busy);
+  const canRun = useRunAction((s) => s.canRun);
 
   const run: Run | undefined =
     runs.find((r) => r.promptId === currentPromptId) ?? runs[0];
@@ -98,6 +102,19 @@ export function LivePreview({ objectInfo, onClose, closeLabel }: Props) {
           </span>
         )}
         <div className="ml-auto flex items-center gap-1">
+          <Button
+            size="sm"
+            onClick={() => runFn?.()}
+            disabled={!runFn || !canRun || runBusy}
+            title={isRunning ? t('panel.runMore') : t('panel.run')}
+          >
+            {runBusy ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Play className="size-3" />
+            )}
+            {isRunning ? t('panel.runMore') : t('panel.run')}
+          </Button>
           <Button
             size="sm"
             variant="destructive"
